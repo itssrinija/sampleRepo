@@ -1,0 +1,132 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pep-eip-cdp-data-retention-deletion
+  namespace: pep-eiap-global-services-dev
+  labels:
+    app: pep-eip-cdp-data-retention-deletion
+    environment: development
+    pep-cmdb-app-service: API_MICROSERVICES_EIS_CDP
+    cluster-name: pep-eiap-nonprod-eus-global-01-aks
+    namespace: pep-eiap-global-services-dev
+    region: eus
+    costcenter: "3001175"
+    program: cdp
+    business-group: EIS
+    business-interface-name: cdp-appsflyer-data-extractor
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pep-eip-cdp-data-retention-deletion
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: pep-eip-cdp-data-retention-deletion
+    spec:
+      initContainers: 
+      - name: elastic-java-agent 
+        image: docker.elastic.co/observability/apm-agent-java:1.28.1 
+        volumeMounts: 
+        - mountPath: /elastic/apm/agent 
+          name: elastic-apm-agent 
+        command: ['cp', '-v', '/usr/agent/elastic-apm-agent.jar', '/elastic/apm/agent']
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      serviceAccountName: pep-eiap-global-services-dev-sa
+      automountServiceAccountToken: true
+      imagePullSecrets:
+        - name: pep-eiap-global-services-dev-acr-cred
+      containers:
+      - name: pep-eip-cdp-data-retention-deletion
+        image: pepeiapnonprodglobalcommonacr.azurecr.io/pep/eip/shared-services/pep-eip-cdp-data-retention-deletion:BUILD_NUMBER
+        imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"   
+        env:
+        ## Update the APM server##
+        - name: ELASTIC_APM_SERVER_URL
+          valueFrom: 
+            secretKeyRef: 
+              name: apm-secret
+              key: apm-url
+        ## Update the value with app name eg:pepsico-cto-cmp-ui ##
+        - name: ELASTIC_APM_SERVICE_NAME 
+          value: "pep-eip-cdp-data-retention-deletion"
+        ## Update with the application package name ## 
+        - name: ELASTIC_APM_APPLICATION_PACKAGES 
+          value: "com.pepsico.eip.cdp.retention"
+        ## Update it with the current environment Dev,QA ##
+        - name: ELASTIC_APM_ENVIRONMENT 
+          value: EUS-DEV
+        ## To get all the APM metrics ## 
+        - name: ELASTIC_APM_LOG_LEVEL 
+          value: ERROR
+        ## This will be already present in your namespace ##
+        - name: ELASTIC_APM_SECRET_TOKEN 
+          valueFrom: 
+            secretKeyRef: 
+              name: apm-secret
+              key: apm-server-token 
+
+        - name: JAVA_TOOL_OPTIONS 
+          value: "-XX:InitialRAMPercentage=60.0 -XX:MaxRAMPercentage=60.0 -XX:+UseG1GC -XX:+UseStringDeduplication -javaagent:/elastic/apm/agent/elastic-apm-agent.jar"
+        ports:
+        - containerPort: 8080
+          name: app-port
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: app-port
+          initialDelaySeconds: 90
+          periodSeconds: 30
+          timeoutSeconds: 30
+        livenessProbe:
+          httpGet: 
+            path: /actuator/health/liveness
+            port: app-port
+          initialDelaySeconds: 90
+          periodSeconds: 30
+          timeoutSeconds: 30
+        ## ECE APM - Volume mount configuration ##
+        volumeMounts:
+        - mountPath: /config
+          name: application-config
+          readOnly: true
+        - mountPath: /elastic/apm/agent 
+          name: elastic-apm-agent
+      ## ECE APM - Volume configuration ##
+      volumes:
+      - name: elastic-apm-agent 
+        emptyDir: {}
+      - name: application-config
+        configMap:
+          items:
+          - key: pep-eip-cdp-data-retention-deletion-dev.yml
+            path: application.yml
+          name: pep-eip-cdp-data-retention-deletion-configmap
+
+                  
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pep-eip-cdp-data-retention-deletion
+  namespace: pep-eiap-global-services-dev
+  labels:
+    app: pep-eip-cdp-data-retention-deletion
+    spring-boot: "true"  
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+  selector:
+    app: pep-eip-cdp-data-retention-deletion
